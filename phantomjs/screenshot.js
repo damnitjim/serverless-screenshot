@@ -12,14 +12,14 @@ page.onResourceReceived = function(response) {
 
 address = system.args[1];
 output = system.args[2];
-width = system.args[3];
-height = system.args[4];
+width = parseInt(system.args[3]);
+height = parseInt(system.args[4]);
 timeout = system.args[5];
 
 console.log("Args: ", system.args);
 console.log("Screenshotting: ", address, ", to: ", output);
 
-page.viewportSize = { width: parseInt(width), height: parseInt(height) };
+page.viewportSize = { width: width, height: height };
 console.log("Viewport: ", JSON.stringify(page.viewportSize));
 
 page.open(address, function (status) {
@@ -32,6 +32,11 @@ page.open(address, function (status) {
       page.evaluate(function() {
         console.log('scrolling', window.document.body.scrollTop);
         window.document.body.scrollTop = window.document.body.scrollTop + 1024;
+        /* scale the whole body */
+        window.document.body.style.webkitTransform = "scale(2)";
+        window.document.body.style.webkitTransformOrigin = "0% 0%";
+        /* fix the body width that overflows out of the viewport */
+        window.document.body.style.width = "50%";
       });
     }, 255);
 
@@ -45,6 +50,7 @@ page.open(address, function (status) {
 
     // after the timeout, save the screenbuffer to file
     window.setTimeout(function() {
+      page.clipRect = { left: 0, top: 0, width: width, height: height };
       page.render(output);
       phantom.exit();
     }, timeout);

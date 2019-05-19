@@ -12,13 +12,9 @@ custom:
 
 provider:
   name: aws
-  runtime: nodejs4.3
-  stage: dev
+  runtime: nodejs8.10
+  stage: ${opt:stage, 'dev'}  
   region: us-east-1
-
-  # We need to lockdown the apigateway, so we can control who can use the api
-  apiKeys:
-    - app-api-key
 
   # We need to give the lambda functions access to list and write to our bucket, it needs:
   # - to be able to 'list' the bucket

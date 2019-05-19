@@ -3,14 +3,50 @@ const crypto = require('crypto');
 const fs = require('fs');
 const AWS = require('aws-sdk');
 const validUrl = require('valid-url');
+const sharp = require('sharp');
+const stream = require('stream');
 
 // overall constants
 const screenWidth = 1280;
 const screenHeight = 1024;
+const s3 = new AWS.S3();
+
+// create the read stream abstraction for downloading data from S3
+const readStreamFromS3 = ({ Bucket, Key }) => {
+  console.log(`Getting S3 Object bucket ${Bucket} with key ${Key}`);
+  return s3.getObject({ Bucket, Key }).createReadStream();
+};
+// create the write stream abstraction for uploading data to S3
+const writeStreamToS3 = ({ Bucket, Key, WebsiteRedirectLocation }) => {
+  console.log(`Writing to S3 Object bucket ${Bucket} with key ${Key}`);
+  const pass = new stream.PassThrough();
+  return {
+    writeStream: pass,
+    uploadFinished: s3.upload({
+      ACL: 'public-read',
+      Body: pass,
+      Bucket,
+      ContentType: 'image/png',
+      Key,
+      WebsiteRedirectLocation,
+    }).promise(),
+  };
+};
+
+// sharp resize stream
+const streamToSharp = ({ width, height }) => {
+  console.log('Resizing image with Sharp!');
+  return sharp()
+    .sequentialRead()
+    .resize(width, height)
+    .toFormat('png');
+};
 
 // screenshot the given url
 module.exports.take_screenshot = (event, context, cb) => {
-  const targetUrl = event.query.url;
+  console.log(JSON.stringify(event));
+
+  const targetUrl = event.queryStringParameters.url;
   const timeout = event.stageVariables.screenshotTimeout;
 
   // check if the given url is valid
@@ -41,12 +77,12 @@ module.exports.take_screenshot = (event, context, cb) => {
       const fileBuffer = fs.readFileSync(`/tmp/${targetHash}.png`);
 
       // upload the file
-      const s3 = new AWS.S3();
       s3.putObject({
         ACL: 'public-read',
         Key: targetFilename,
         Body: fileBuffer,
         Bucket: targetBucket,
+        WebsiteRedirectLocation: targetUrl,
         ContentType: 'image/png',
       }, (err) => {
         if (err) {
@@ -71,8 +107,9 @@ module.exports.take_screenshot = (event, context, cb) => {
 
 // gives a list of urls for the given snapshotted url
 module.exports.list_screenshots = (event, context, cb) => {
-  const targetUrl = event.query.url;
+  console.log(JSON.stringify(event));
 
+  const targetUrl = event.query.url;
   // check if the given url is valid
   if (!validUrl.isUri(targetUrl)) {
     cb(`422, please provide a valid url, not: ${targetUrl}`);
@@ -83,7 +120,6 @@ module.exports.list_screenshots = (event, context, cb) => {
   const targetBucket = event.stageVariables.bucketName;
   const targetPath = `${targetHash}/`;
 
-  const s3 = new AWS.S3();
   s3.listObjects({
     Bucket: targetBucket,
     Prefix: targetPath,
@@ -106,20 +142,49 @@ module.exports.list_screenshots = (event, context, cb) => {
 };
 
 module.exports.create_thumbnails = (event, context, cb) => {
+  console.log(JSON.stringify(event));
+
   // define all the thumbnails that we want
-  const widths = {
-    '320x240': `-crop ${screenWidth}x${screenHeight}+0x0 -thumbnail 320x240`,
-    '640x480': `-crop ${screenWidth}x${screenHeight}+0x0 -thumbnail 640x480`,
-    '800x600': `-crop ${screenWidth}x${screenHeight}+0x0 -thumbnail 800x600`,
-    '1024x768': `-crop ${screenWidth}x${screenHeight}+0x0 -thumbnail 1024x768`,
-    100: '-thumbnail 100x',
-    200: '-thumbnail 200x',
-    320: '-thumbnail 320x',
-    400: '-thumbnail 400x',
-    640: '-thumbnail 640x',
-    800: '-thumbnail 800x',
-    1024: '-thumbnail 1024x',
+  // const widths = {
+  //   '320x240': `-crop ${screenWidth}x${screenHeight}+0x0 -thumbnail 320x240`,
+  //   '640x480': `-crop ${screenWidth}x${screenHeight}+0x0 -thumbnail 640x480`,
+  //   '800x600': `-crop ${screenWidth}x${screenHeight}+0x0 -thumbnail 800x600`,
+  //   '1024x768': `-crop ${screenWidth}x${screenHeight}+0x0 -thumbnail 1024x768`,
+  //   100: '-thumbnail 100x',
+  //   200: '-thumbnail 200x',
+  //   320: '-thumbnail 320x',
+  //   400: '-thumbnail 400x',
+  //   640: '-thumbnail 640x',
+  //   800: '-thumbnail 800x',
+  //   1024: '-thumbnail 1024x',
+  // };
+  const image_resizes = {
+    '320x240': {
+      width: 320,
+      height: 240,
+    },
+    '640x480': {
+      width: 640,
+      height: 480,
+    },
+    '800x600': {
+      width: 800,
+      height: 600,
+    },
+    '1024x768': {
+      width: 1024,
+      height: 768,
+    },
   };
+  // const image_thumbnails = {
+  //   100: '-thumbnail 100x',
+  //   200: '-thumbnail 200x',
+  //   320: '-thumbnail 320x',
+  //   400: '-thumbnail 400x',
+  //   640: '-thumbnail 640x',
+  //   800: '-thumbnail 800x',
+  //   1024: '-thumbnail 1024x',
+  // };
   const record = event.Records[0];
 
   // we only want to deal with originals
@@ -131,49 +196,43 @@ module.exports.create_thumbnails = (event, context, cb) => {
 
   // get the prefix, and get the hash
   const prefix = record.s3.object.key.split('/')[0];
-  const hash = prefix;
 
-  // download the original to disk
-  const s3 = new AWS.S3();
-  const sourcePath = '/tmp/original.png';
-  const targetStream = fs.createWriteStream(sourcePath);
-  const fileStream = s3.getObject({
-    Bucket: record.s3.bucket.name,
-    Key: record.s3.object.key,
-  }).createReadStream();
-  fileStream.pipe(targetStream);
+  Object.keys(image_resizes).forEach((size) => {
+    try {
+      // create the read and write streams from and to S3 and the Sharp resize stream
+      const readStream = readStreamFromS3({
+        Bucket: record.s3.bucket.name,
+        Key: record.s3.object.key,
+      });
+      const resizeStream = streamToSharp({
+        width: image_resizes[size].width,
+        height: image_resizes[size].height,
+      });
+      const { writeStream, uploadFinished } = writeStreamToS3({
+        Bucket: record.s3.bucket.name,
+        Key: `${prefix}/${size}.png`,
+        WebsiteRedirectLocation: record.s3.WebsiteRedirectLocation,
+      });
 
-  // when file is downloaded, start processing
-  fileStream.on('end', () => {
-    // resize to every configured size
-    Object.keys(widths).forEach((size) => {
-      const cmd = `convert ${widths[size]} ${sourcePath} /tmp/${hash}-${size}.png`;
-      console.log('Running ', cmd);
+      // trigger the stream
+      readStream
+        .pipe(resizeStream)
+        .pipe(writeStream);
 
-      exec(cmd, (error, stdout, stderr) => {
-        if (error) {
-          // the command failed (non-zero), fail
-          console.warn(`exec error: ${error}, stdout, stderr`);
-          // continue
-        } else {
-          // resize was succesfull, upload the file
-          console.info(`Resize to ${size} OK`);
-          var fileBuffer = fs.readFileSync(`/tmp/${hash}-${size}.png`);
-          s3.putObject({
-              ACL: 'public-read',
-              Key: `${prefix}/${size}.png`,
-              Body: fileBuffer,
-              Bucket: record.s3.bucket.name,
-              ContentType: 'image/png'
-          }, function(err, data){
-            if(err) {
-              console.warn(err);
-            } else {
-              console.info(`${size} uploaded`)
-            }
-          });
-        }
-      })
-    });
+      // wait for the stream to finish
+      (async () => {
+        await uploadFinished;
+      })();
+    } catch (err) {
+      console.error(err);
+      return {
+        statusCode: '500',
+        body: err.message,
+      };
+    }
   });
+  return {
+    statusCode: '200',
+    body: 'Successfully resized images!',
+  };
 };
