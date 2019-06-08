@@ -15,8 +15,8 @@
           "size": 1234
         },
         "bucket": {
-          "arn": "arn:aws:s3:::dev-foobar-screenshots",
-          "name": "dev-foobar-screenshots",
+          "arn": "arn:aws:s3:::dev-foobar-screenshot",
+          "name": "dev-foobar-screenshot",
           "ownerIdentity": {
             "principalId": "EXAMPLE"
           }

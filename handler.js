@@ -43,7 +43,7 @@ const streamToSharp = ({ width, height }) => {
 };
 
 // screenshot the given url
-module.exports.take_screenshot = (event, context, cb) => {
+module.exports.take_screenshot = (event, context, callback) => {
   console.log(JSON.stringify(event));
 
   const targetUrl = event.queryStringParameters.url;
@@ -51,8 +51,15 @@ module.exports.take_screenshot = (event, context, cb) => {
 
   // check if the given url is valid
   if (!validUrl.isUri(targetUrl)) {
-    cb(`422, please provide a valid url, not: ${targetUrl}`);
-    return false;
+    callback(
+      null,
+      {
+        statusCode: 422,
+        body: `Please provide a valid url, not: ${targetUrl}`,
+        headers: { 'Content-Type': 'text/plain' }
+      }
+    );
+    return;
   }
 
   const targetBucket = event.stageVariables.bucketName;
@@ -62,15 +69,21 @@ module.exports.take_screenshot = (event, context, cb) => {
 
   // build the cmd for phantom to render the url
   const cmd = `./phantomjs/phantomjs_linux-x86_64 --debug=yes --ignore-ssl-errors=true ./phantomjs/screenshot.js ${targetUrl} /tmp/${targetHash}.png ${screenWidth} ${screenHeight} ${timeout}`; // eslint-disable-line max-len
-  // const cmd =`./phantomjs/phantomjs_osx          --debug=yes --ignore-ssl-errors=true ./phantomjs/screenshot.js ${targetUrl} /tmp/${targetHash}.png ${screenWidth} ${screenHeight} ${timeout}`;
+  // const cmd =`./phantomjs/phantomjs_osx --debug=yes --ignore-ssl-errors=true ./phantomjs/screenshot.js ${targetUrl} /tmp/${targetHash}.png ${screenWidth} ${screenHeight} ${timeout}`;
   console.log(cmd);
+
+  let response = {
+    statusCode: 200,
+    body: 'Success',
+    headers: { 'Content-Type': 'text/plain' },
+  };
 
   // run the phantomjs command
   exec(cmd, (error, stdout, stderr) => {
     if (error) {
       // the command failed (non-zero), fail the entire call
       console.warn(`exec error: ${error}`, stdout, stderr);
-      cb(`422, please try again ${error}`);
+      response = Object.assign(response, { statusCode: 422, body: `Please try again ${error}` });
     } else {
       // snapshotting succeeded, let's upload to S3
       // read the file into buffer (perhaps make this async?)
@@ -85,63 +98,77 @@ module.exports.take_screenshot = (event, context, cb) => {
         WebsiteRedirectLocation: targetUrl,
         ContentType: 'image/png',
       }, (err) => {
-        if (err) {
+        if (error) {
           console.warn(err);
-          cb(err);
+          response = Object.assign(response, { statusCode: 422, body: `Error, please try again ${err}` });
         } else {
-          // console.info(stderr);
-          // console.info(stdout);
-          cb(null, {
-            hash: targetHash,
-            key: `${targetFilename}`,
-            bucket: targetBucket,
-            url: `${event.stageVariables.endpoint}${targetFilename}`,
-          });
+          response = Object.assign(
+            response, {
+              statusCode: 200,
+              body: 'Success',
+              headers: { 'Content-Type': 'text/plain' },
+              hash: targetHash,
+              key: `${targetFilename}`,
+              bucket: targetBucket,
+              url: `${event.stageVariables.endpoint}${targetFilename}`,
+            }
+          );
         }
-        return;
       });
     }
   });
+  callback(
+    null,
+    response,
+  );
 };
 
-
 // gives a list of urls for the given snapshotted url
-module.exports.list_screenshots = (event, context, cb) => {
+module.exports.list_screenshots = (event, context, callback) => {
   console.log(JSON.stringify(event));
 
-  const targetUrl = event.query.url;
-  // check if the given url is valid
-  if (!validUrl.isUri(targetUrl)) {
-    cb(`422, please provide a valid url, not: ${targetUrl}`);
-    return false;
-  }
-
+  const targetUrl = event.queryStringParameters.url;
   const targetHash = crypto.createHash('md5').update(targetUrl).digest('hex');
   const targetBucket = event.stageVariables.bucketName;
   const targetPath = `${targetHash}/`;
+  let response = {
+    statusCode: 200,
+    body: 'Success',
+    headers: { 'Content-Type': 'text/plain' },
+  };
 
-  s3.listObjects({
-    Bucket: targetBucket,
-    Prefix: targetPath,
-    EncodingType: 'url',
-  }, (err, data) => {
-    if (err) {
-      cb(err);
-    } else {
-      const urls = {};
-      // for each key, get the image width and add it to the output object
-      data.Contents.forEach((content) => {
-        const parts = content.Key.split('/');
-        const size = parts.pop().split('.')[0];
-        urls[size] = `${event.stageVariables.endpoint}${content.Key}`;
-      });
-      cb(null, urls);
-    }
-    return;
-  });
+  // check if the given url is valid
+  if (!validUrl.isUri(targetUrl)) {
+    response = Object.assign(response, { statusCode: 422, body: `Please provide a valid url, not: ${targetUrl}` });
+  } else {
+    console.log(`Looking up images in bucket ${targetBucket} with prefix ${targetPath}`);
+    s3.listObjects({
+      Bucket: targetBucket,
+      Prefix: targetPath,
+      EncodingType: 'url',
+    }, (err, data) => {
+      if (err) {
+        response = Object.assign(response, { statusCode: 422, body: `Error, please try again: ${err}` });
+      } else {
+        console.log(JSON.stringify(data));
+        const urls = {};
+        // for each key, get the image width and add it to the output object
+        data.Contents.forEach((content) => {
+          const parts = content.Key.split('/');
+          const size = parts.pop().split('.')[0];
+          urls[size] = `${event.stageVariables.endpoint}${content.Key}`;
+        });
+        response = Object.assign(response, { body: JSON.stringify(urls) });
+      }
+    });
+  }
+  callback(
+    null,
+    response,
+  );
 };
 
-module.exports.create_thumbnails = (event, context, cb) => {
+module.exports.create_thumbnails = (event, context, callback) => {
   console.log(JSON.stringify(event));
 
   // define all the thumbnails that we want
@@ -185,54 +212,54 @@ module.exports.create_thumbnails = (event, context, cb) => {
   //   800: '-thumbnail 800x',
   //   1024: '-thumbnail 1024x',
   // };
+  let response = {
+    statusCode: 200,
+    body: 'Success',
+    headers: { 'Content-Type': 'text/plain' },
+  };
   const record = event.Records[0];
 
   // we only want to deal with originals
   if (record.s3.object.key.indexOf('original.png') === -1) {
     console.warn('Not an original, skipping');
-    cb('Not an original, skipping');
-    return false;
+    response = Object.assign(response, { body: 'Not an original, skipping' });
+  } else {
+    // get the prefix, and get the hash
+    const prefix = record.s3.object.key.split('/')[0];
+
+    Object.keys(image_resizes).forEach((size) => {
+      try {
+        // create the read and write streams from and to S3 and the Sharp resize stream
+        const readStream = readStreamFromS3({
+          Bucket: record.s3.bucket.name,
+          Key: record.s3.object.key,
+        });
+        const resizeStream = streamToSharp({
+          width: image_resizes[size].width,
+          height: image_resizes[size].height,
+        });
+        const { writeStream, uploadFinished } = writeStreamToS3({
+          Bucket: record.s3.bucket.name,
+          Key: `${prefix}/${size}.png`,
+          WebsiteRedirectLocation: record.s3.WebsiteRedirectLocation,
+        });
+        // trigger the stream
+        readStream
+          .pipe(resizeStream)
+          .pipe(writeStream);
+        // wait for the stream to finish
+        (async () => {
+          await uploadFinished;
+        })();
+      } catch (err) {
+        console.error(err);
+        response = Object.assign(response, { statusCode: 500, body: `Error, please try again: ${err}` });
+      }
+    });
   }
-
-  // get the prefix, and get the hash
-  const prefix = record.s3.object.key.split('/')[0];
-
-  Object.keys(image_resizes).forEach((size) => {
-    try {
-      // create the read and write streams from and to S3 and the Sharp resize stream
-      const readStream = readStreamFromS3({
-        Bucket: record.s3.bucket.name,
-        Key: record.s3.object.key,
-      });
-      const resizeStream = streamToSharp({
-        width: image_resizes[size].width,
-        height: image_resizes[size].height,
-      });
-      const { writeStream, uploadFinished } = writeStreamToS3({
-        Bucket: record.s3.bucket.name,
-        Key: `${prefix}/${size}.png`,
-        WebsiteRedirectLocation: record.s3.WebsiteRedirectLocation,
-      });
-
-      // trigger the stream
-      readStream
-        .pipe(resizeStream)
-        .pipe(writeStream);
-
-      // wait for the stream to finish
-      (async () => {
-        await uploadFinished;
-      })();
-    } catch (err) {
-      console.error(err);
-      return {
-        statusCode: '500',
-        body: err.message,
-      };
-    }
-  });
-  return {
-    statusCode: '200',
-    body: 'Successfully resized images!',
-  };
+  response = Object.assign(response, { statusCode: 500, body: 'Successfully resized images!' });
+  callback(
+    null,
+    response,
+  );
 };

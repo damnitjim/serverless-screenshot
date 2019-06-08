@@ -1,8 +1,8 @@
-service: lambda-screenshots
+service: lambda-screenshot
 
 custom:
   # change this, so it's unique for your setup
-  bucket_name: ${opt:stage,self:provider.stage}-${env:USER}-screenshots
+  bucket_name: ${opt:stage,self:provider.stage}-${env:USER}-screenshot
 
   stageVariables:
     bucketName: ${self:custom.bucket_name}
@@ -35,7 +35,7 @@ functions:
     timeout: 15
     events:
       - http:
-          path: screenshots
+          path: screenshot
           method: post
           # Marking the function as private will require an api-key
           private: true
@@ -51,12 +51,12 @@ functions:
               # paths:
               #   bar: false
 
-  listScreenshots:
-    handler: handler.list_screenshots
+  listscreenshot:
+    handler: handler.list_screenshot
     timeout: 15
     events:
       - http:
-          path: screenshots
+          path: screenshot
           method: get
           private: true
           request:

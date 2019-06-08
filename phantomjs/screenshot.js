@@ -33,10 +33,10 @@ page.open(address, function (status) {
         console.log('scrolling', window.document.body.scrollTop);
         window.document.body.scrollTop = window.document.body.scrollTop + 1024;
         /* scale the whole body */
-        window.document.body.style.webkitTransform = "scale(2)";
-        window.document.body.style.webkitTransformOrigin = "0% 0%";
+        // window.document.body.style.webkitTransform = "scale(2)";
+        // window.document.body.style.webkitTransformOrigin = "0% 0%";
         /* fix the body width that overflows out of the viewport */
-        window.document.body.style.width = "50%";
+        // window.document.body.style.width = "50%";
       });
     }, 255);
 
@@ -50,7 +50,8 @@ page.open(address, function (status) {
 
     // after the timeout, save the screenbuffer to file
     window.setTimeout(function() {
-      page.clipRect = { left: 0, top: 0, width: width, height: height };
+      page.clipRect = { width: width, height: height };
+      page.zoomFactor = 0.50;
       page.render(output);
       phantom.exit();
     }, timeout);
